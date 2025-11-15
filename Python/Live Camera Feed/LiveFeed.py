@@ -3,11 +3,37 @@ import cv2
 import json
 from livekit import rtc
 import requests
+import serial
+import time
 
 # LiveKit config
 ROOM_URL = "wss://pbrobot-ir91vwzj.livekit.cloud"
 TOKEN_URL = "https://pbrobot.onrender.com/getToken?identity=raspberry&roomName=pool"
 
+# --- Arduino Serial Setup ---
+# Change COM port if needed:
+# ARDUINO_PORT = "/dev/ttyACM0"   # Linux/Raspberry Pi
+ARDUINO_PORT = "COM3"         # Windows
+BAUD = 9600
+
+arduino = None
+
+def init_arduino():
+    global arduino
+    try:
+        arduino = serial.Serial(ARDUINO_PORT, BAUD, timeout=1)
+        time.sleep(2)  # Arduino auto-resets on connection
+        print("🔌 Arduino connected!")
+    except Exception as e:
+        print("❌ Could not connect to Arduino:", e)
+
+def send_cmd(cmd: str):
+    """Send simple text command to Arduino."""
+    if arduino and arduino.is_open:
+        arduino.write((cmd + "\n").encode("utf-8"))
+        print("➡️ Sent to Arduino:", cmd)
+    else:
+        print("⚠️ Arduino not connected!")
 
 # --- Camera Publisher ---
 class CameraStream(rtc.VideoSource):
@@ -40,55 +66,48 @@ class CameraStream(rtc.VideoSource):
 # --- Robot Control Handlers ---
 def move_forward():
     print("⬆️ Moving forward")
-    # TODO: Replace with GPIO control
+    send_cmd("forward")
 
 def move_back():
     print("⬇️ Moving backward")
-    # TODO: Replace with GPIO control
+    send_cmd("back")
 
 def turn_left():
     print("⬅️ Turning left")
-    # TODO: Replace with GPIO control
+    send_cmd("left")
 
 def turn_right():
     print("➡️ Turning right")
-    # TODO: Replace with GPIO control
+    send_cmd("right")
 
 def stop_motors():
     print("⏹️ Stopping motors")
-    # TODO: Replace with GPIO control
+    send_cmd("stop")
 
 
 # --- Main Logic ---
 async def main():
+    init_arduino()
+
     # Get token from backend
     resp = requests.get(TOKEN_URL)
     data = resp.json()
     TOKEN = data["token"]
     print("Got token:", TOKEN[:40], "...")
 
-    # Connect to LiveKit room
     room = rtc.Room()
 
-    # Debug event listeners
     room.on("connected", lambda: print("✅ Connected to LiveKit"))
     room.on("disconnected", lambda: print("❌ Disconnected from LiveKit"))
-    room.on("participant_connected", lambda p: print(f"👤 Participant joined: {p.identity}"))
-    room.on("participant_disconnected", lambda p: print(f"👤 Participant left: {p.identity}"))
 
-    # Listen for commands via DataChannel
+    # Listen for commands
     @room.on("data_received")
     def on_data_received(packet):
         try:
-            # Extract raw bytes from DataPacket
-            raw = packet.data
-            msg = raw.decode("utf-8")
-
-            print(f"📩 Command received: {msg}")
-
-            import json
+            msg = packet.data.decode("utf-8")
             payload = json.loads(msg)
             cmd = payload.get("cmd")
+            print("📩 Received:", cmd)
 
             if cmd == "forward":
                 move_forward()
@@ -111,10 +130,10 @@ async def main():
     # Setup camera stream
     camera = CameraStream(640, 480)
     track = rtc.LocalVideoTrack.create_video_track("pi-camera", camera)
-    pub = await room.local_participant.publish_track(track)
-    print("✅ Track publish request done:", pub.sid)
+    await room.local_participant.publish_track(track)
 
-    # Start camera capture loop
+    print("📷 Video stream started")
+
     await camera.run()
 
 
